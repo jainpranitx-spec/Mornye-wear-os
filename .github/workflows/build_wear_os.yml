@@ -1,0 +1,155 @@
+name: Build Wear OS APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+env:
+  FLUTTER_VERSION: "3.47.8"
+  ANDROID_NDK_VERSION: "30.0.16248370"
+  MORNYE_RUST_ANDROID_ABIS: "arm64-v8a,armeabi-v7a"
+
+jobs:
+  build-wear-os-apk:
+    name: Build Wear OS Debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # -------------------------------------------------------------------------
+      # Checkout source code
+      # -------------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # -------------------------------------------------------------------------
+      # Java 17 (Temurin) for Android Gradle Plugin
+      # -------------------------------------------------------------------------
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      # -------------------------------------------------------------------------
+      # Android SDK & NDK setup
+      # -------------------------------------------------------------------------
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 34
+          ndk-version: ${{ env.ANDROID_NDK_VERSION }}
+          emulator: false
+
+      # -------------------------------------------------------------------------
+      # Install Rust toolchain with Android targets
+      # -------------------------------------------------------------------------
+      - name: Install Rust (stable) with Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+
+      # -------------------------------------------------------------------------
+      # Install cargo-ndk for Android Rust compilation
+      # -------------------------------------------------------------------------
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      # -------------------------------------------------------------------------
+      # Cache Cargo artifacts
+      # -------------------------------------------------------------------------
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust_backend/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # -------------------------------------------------------------------------
+      # Build Rust backend for Android (arm64-v8a & armeabi-v7a)
+      # -------------------------------------------------------------------------
+      - name: Build Rust backend for Android
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_NDK_HOME }}
+          MORNYE_RUST_ANDROID_ABIS: ${{ env.MORNYE_RUST_ANDROID_ABIS }}
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          echo "Building Rust backend for ABIs: $MORNYE_RUST_ANDROID_ABIS"
+          chmod +x scripts/build_rust_backend.sh
+          bash scripts/build_rust_backend.sh android
+
+      # -------------------------------------------------------------------------
+      # Cache Flutter SDK
+      # -------------------------------------------------------------------------
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+          cache-key: flutter-${{ runner.os }}-${{ env.FLUTTER_VERSION }}
+
+      # -------------------------------------------------------------------------
+      # Install Flutter dependencies
+      # -------------------------------------------------------------------------
+      - name: Get Flutter dependencies
+        run: flutter pub get
+
+      # -------------------------------------------------------------------------
+      # Run Dart code generation (build_runner, uniffi bindings, etc.)
+      # -------------------------------------------------------------------------
+      - name: Run code generation
+        run: |
+          dart run build_runner build --delete-conflicting-outputs
+          dart scripts/prepare_flutter_sdk.dart
+
+      # -------------------------------------------------------------------------
+      # Build Wear OS Debug APK (both arm64 and arm32)
+      # -------------------------------------------------------------------------
+      - name: Build Wear OS Debug APK
+        env:
+          MORNYE_RUST_ANDROID_ABIS: ${{ env.MORNYE_RUST_ANDROID_ABIS }}
+          MORNYE_DISCORD_SDK: "0"
+        run: |
+          echo "Building Wear OS APK for ABIs: $MORNYE_RUST_ANDROID_ABIS"
+          flutter build apk \
+            --debug \
+            --target-platform android-arm,android-arm64 \
+            --dart-define=GIT_COMMIT=$(git rev-parse --short=8 HEAD)
+
+      # -------------------------------------------------------------------------
+      # Verify APK exists and report size
+      # -------------------------------------------------------------------------
+      - name: Verify APK output
+        run: |
+          APK_PATH="build/app/outputs/flutter-apk/app-debug.apk"
+          if [[ -f "$APK_PATH" ]]; then
+            echo "APK found at: $APK_PATH"
+            ls -lh "$APK_PATH"
+          else
+            echo "Error: APK not found at expected location!"
+            find build -name "*.apk" -type f 2>/dev/null || echo "No APK files found anywhere"
+            exit 1
+          fi
+
+      # -------------------------------------------------------------------------
+      # Upload APK as build artifact
+      # -------------------------------------------------------------------------
+      - name: Upload Wear OS Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mornye-wear-os-debug-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          retention-days: 30
+          compression-level: 6

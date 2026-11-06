@@ -16,6 +16,10 @@ Desktop.ini
 CLAUDE.md
 AGENTS.md
 
+# OpenCode / AI agent local files
+.opencode/
+opencode.json
+
 # Local release notes, screenshots and promo assets
 /output/
 
