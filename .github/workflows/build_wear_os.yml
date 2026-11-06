@@ -9,7 +9,7 @@ on:
 
 env:
   FLUTTER_VERSION: "3.47.8"
-  ANDROID_NDK_VERSION: "30.0.16248370"
+  ANDROID_NDK_VERSION: "r27c"
   MORNYE_RUST_ANDROID_ABIS: "arm64-v8a,armeabi-v7a"
 
 jobs:
@@ -44,8 +44,21 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           api-level: 34
-          ndk-version: ${{ env.ANDROID_NDK_VERSION }}
+          ndk-version: r27c
           emulator: false
+          cache: gradle
+
+      # -------------------------------------------------------------------------
+      # Verify Android SDK/NDK installation
+      # -------------------------------------------------------------------------
+      - name: Verify Android SDK and NDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          ls -la "$ANDROID_NDK_HOME" || echo "NDK not found at ANDROID_NDK_HOME"
+          ls -la "$ANDROID_HOME/ndk" || echo "NDK not found in SDK"
+          # Find actual NDK path
+          find "$ANDROID_HOME" -name "llvm-ar" -type f 2>/dev/null | head -5
 
       # -------------------------------------------------------------------------
       # Install Rust toolchain with Android targets
@@ -60,6 +73,23 @@ jobs:
       # -------------------------------------------------------------------------
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
+
+      # -------------------------------------------------------------------------
+      # Set NDK environment for Rust build
+      # -------------------------------------------------------------------------
+      - name: Configure NDK environment
+        run: |
+          # The setup-android action sets ANDROID_NDK_HOME, but let's verify and export
+          if [[ -z "$ANDROID_NDK_HOME" ]]; then
+            # Try to find NDK
+            NDK_PATH=$(find "$ANDROID_HOME/ndk" -maxdepth 1 -type d | tail -1)
+            if [[ -d "$NDK_PATH" ]]; then
+              echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
+              export ANDROID_NDK_HOME="$NDK_PATH"
+            fi
+          fi
+          echo "Using NDK: $ANDROID_NDK_HOME"
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_HOME" >> $GITHUB_ENV
 
       # -------------------------------------------------------------------------
       # Cache Cargo artifacts
